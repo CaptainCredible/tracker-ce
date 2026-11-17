@@ -20,15 +20,15 @@
 #ifdef TRACKER_MINI
 constexpr uint8_t baseMenuGroupCount = 8;
 constexpr uint8_t projectMenuGroupCount = 10;
-constexpr uint8_t generalMenuGroupCount = 9;
+constexpr uint8_t generalMenuGroupCount = 8;
 #elif defined(PLATFORM_IMX)
 constexpr uint8_t baseMenuGroupCount = 7;
 constexpr uint8_t projectMenuGroupCount = 10;
-constexpr uint8_t generalMenuGroupCount = 12;
+constexpr uint8_t generalMenuGroupCount = 11;
 #else
-constexpr uint8_t baseMenuGroupCount = 6;
+constexpr uint8_t baseMenuGroupCount = 7;
 constexpr uint8_t projectMenuGroupCount = 10;
-constexpr uint8_t generalMenuGroupCount = 12;
+constexpr uint8_t generalMenuGroupCount = 11;
 #endif
 
 // baza baz
@@ -809,7 +809,7 @@ void cConfigEditor::configListConfirm(uint8_t list_pos)
 // wykonywanie akcji/edycji na elemencie menu
 void cMenuGroup::executeItem()
 {
-    if (childs[selectedItem]->type != menuTypeItem)
+    if (childs[selectedItem] == nullptr || childs[selectedItem]->type != menuTypeItem)
         return;
 
     cMenuItem* selected_child = (cMenuItem*)childs[selectedItem];
@@ -846,7 +846,7 @@ void cMenuGroup::reloadValues()
 {
     for (uint8_t i = 0; i < childsCount; i++)
     {
-        if (childs[i]->type == menuTypeItem)
+        if (childs[i] != nullptr && childs[i]->type == menuTypeItem)
         {
             char* valueText = ((cMenuItem*)childs[i])->getValue();
 
