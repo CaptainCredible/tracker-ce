@@ -87,6 +87,83 @@ uint8_t isIncomingChannelDesired(uint8_t chan)
     return (mtConfig.midi.notesInChannel == chan || mtConfig.midi.notesInChannel == 0);
 }
 
+//======================================================================================================================
+// Direct synth-part MIDI control
+//
+// Each synth part has its own MIDI channel, independent of the current screen and of the
+// selected instrument:
+//   channel 10 -> synth 1, channel 11 -> synth 2, channel 12 -> synth 3
+//
+// On those channels:
+//   notes      -> played directly on that synth part
+//   CC 10..15  -> macro 1..6
+//   CC 16      -> delay send
+//   CC 17      -> reverb send
+//   CC 18      -> panning
+//   CC 19      -> gain
+//
+// Anything else on those channels falls through to the regular MIDI-in handling.
+// The existing port settings (notes in / CC in: usb / jack / both / off) still apply.
+//======================================================================================================================
+
+#ifdef FEATURE_SYNTH
+static constexpr uint8_t kDirectSynthFirstChannel = 10;
+static constexpr uint8_t kDirectSynthFirstCC = 10;
+
+static constexpr cInstrumentEditor::SynthInstrumentParamsCC kDirectSynthCCMap[] = {
+    cInstrumentEditor::kMacro1,         cInstrumentEditor::kMacro2,
+    cInstrumentEditor::kMacro3,         cInstrumentEditor::kMacro4,
+    cInstrumentEditor::kMacro5,         cInstrumentEditor::kMacro6,
+    cInstrumentEditor::kSynthDelaySend, cInstrumentEditor::kSynthReverbSend,
+    cInstrumentEditor::kSynthPanning,   cInstrumentEditor::kSynthGain,
+};
+static constexpr int kDirectSynthCCCount = sizeof(kDirectSynthCCMap) / sizeof(kDirectSynthCCMap[0]);
+
+// returns synth part index, or -1 if the channel is not a direct-synth channel
+static int directSynthPartForChannel(uint8_t channel)
+{
+    int part = int(channel) - kDirectSynthFirstChannel;
+    return (part >= 0 && part < kSynthParts) ? part : -1;
+}
+
+// returns true if the message was consumed
+static bool handleDirectSynthCC(uint8_t channel, uint8_t number, uint8_t value)
+{
+    int part = directSynthPartForChannel(channel);
+    if (part < 0)
+        return false;
+
+    int idx = int(number) - kDirectSynthFirstCC;
+    if (idx < 0 || idx >= kDirectSynthCCCount)
+        return false;
+
+    IE->handleSynthParamControlChange(part, kDirectSynthCCMap[idx], value);
+    return true;
+}
+
+// returns true if the message was consumed
+static bool handleDirectSynthNote(uint8_t channel, uint8_t pitch, uint8_t velocity, bool noteOn)
+{
+    int part = directSynthPartForChannel(channel);
+    if (part < 0)
+        return false;
+
+    int8_t transp = 12 * (mtConfig.midi.middleC - 2);
+    pitch = clamp(pitch + transp, 0, 127);
+
+    // synth parts are addressed on the internal virtual port as channels 1..kSynthParts
+    if (noteOn)
+        sendMidiNoteOn(pitch, velocity, part + 1, true);
+    else
+        sendMidiNoteOff(pitch, 0, part + 1, true);
+
+    return true;
+}
+#else
+static bool handleDirectSynthCC(uint8_t, uint8_t, uint8_t) { return false; }
+static bool handleDirectSynthNote(uint8_t, uint8_t, uint8_t, bool) { return false; }
+#endif
+
 void handleJackNoteOn(byte channel, byte pitch, byte velocity)
 {
     //	Serial.printf("ON\tch: %d, pitch: %d, velo: %d \r\n", channel, pitch,
@@ -102,6 +179,9 @@ void handleJackNoteOn(byte channel, byte pitch, byte velocity)
     if (mtConfig.midi.notesInMode == notesIn_jack ||
         mtConfig.midi.notesInMode == notesIn_usb_and_jack)
     {
+        if (handleDirectSynthNote(channel, pitch, velocity, true))
+            return;
+
 
         if (isIncomingChannelDesired(channel))
         {
@@ -148,6 +228,9 @@ void handleUsbNoteOn(byte channel, byte pitch, byte velocity)
     if (mtConfig.midi.notesInMode == notesIn_usb ||
         mtConfig.midi.notesInMode == notesIn_usb_and_jack)
     {
+        if (handleDirectSynthNote(channel, pitch, velocity, true))
+            return;
+
         if (isIncomingChannelDesired(channel))
         {
             int8_t transp = 12 * (mtConfig.midi.middleC - 2);
@@ -187,6 +270,9 @@ void handleJackNoteOff(byte channel, byte pitch, [[maybe_unused]] byte velocity)
     if (mtConfig.midi.notesInMode == notesIn_jack ||
         mtConfig.midi.notesInMode == notesIn_usb_and_jack)
     {
+        if (handleDirectSynthNote(channel, pitch, 0, false))
+            return;
+
         if (isIncomingChannelDesired(channel))
         {
             int8_t transp = 12 * (mtConfig.midi.middleC - 2);
@@ -233,6 +319,9 @@ void handleUsbNoteOff(byte channel, byte pitch, [[maybe_unused]] byte velocity)
     if (mtConfig.midi.notesInMode == notesIn_usb ||
         mtConfig.midi.notesInMode == notesIn_usb_and_jack)
     {
+        if (handleDirectSynthNote(channel, pitch, 0, false))
+            return;
+
         if (isIncomingChannelDesired(channel))
         {
             int8_t transp = 12 * (mtConfig.midi.middleC - 2);
@@ -274,6 +363,9 @@ void handleJackControlChange(byte channel, byte number, byte value)
     if ((mtConfig.midi.ccInMode == ccIn_None) || (mtConfig.midi.ccInMode == ccIn_usb))
         return;
 
+    if (handleDirectSynthCC(channel, number, value))
+        return;
+
     if ((channel == mtConfig.midi.ccInChannel) || (mtConfig.midi.ccInChannel == ALL_CC_CHANNELS))
     {
         if (mtInterface.isPerformanceModeScreenActive())
@@ -289,6 +381,9 @@ void handleJackControlChange(byte channel, byte number, byte value)
 void handleUSBControlChange(byte channel, byte number, byte value)
 {
     if ((mtConfig.midi.ccInMode == ccIn_None) || (mtConfig.midi.ccInMode == ccIn_jack))
+        return;
+
+    if (handleDirectSynthCC(channel, number, value))
         return;
 
     if ((channel == mtConfig.midi.ccInChannel) || (mtConfig.midi.ccInChannel == ALL_CC_CHANNELS))
